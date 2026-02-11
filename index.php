@@ -55,6 +55,8 @@ if (isset($_POST["submit"])) {
                 header('Content-Description: File Transfer');
                 header('Content-Type: application/octet-stream');
                 header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
+                // 核心：设置 Cookie 告诉前端下载已开始
+                setcookie("fileDownload", "true", time() + 30, "/");
                 echo $fileData;
                 exit;
             }
@@ -101,6 +103,8 @@ if (isset($_POST["submit"])) {
                 header('Content-Type: application/zip');
                 header('Content-Disposition: attachment; filename="' . $zipFileName . '"');
                 header('Content-Length: ' . filesize($zipPath));
+                // 核心：设置 Cookie 告诉前端下载已开始
+                setcookie("fileDownload", "true", time() + 30, "/");
                 readfile($zipPath);
                 @unlink($zipPath);
                 exit;
@@ -188,13 +192,58 @@ if (isset($_POST["submit"])) {
             border-left: 5px solid black;
             word-break: break-all;
         }
+
+        /* --- 加载弹窗样式 --- */
+        #loadingOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.85);
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid black;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
         <h2>Convert File</h2>
-        <form action="" method="post" enctype="multipart/form-data">
+        <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
             <input type="file" name="fileToUpload" required>
 
@@ -214,7 +263,34 @@ if (isset($_POST["submit"])) {
             </div>
         <?php endif; ?>
     </div>
+
+    <div id="loadingOverlay">
+        <div class="loading-box">
+            <div class="spinner"></div>
+            <p style="margin:0; font-weight:bold; color:#333;">Processing...</p>
+            <p style="margin:10px 0 0; font-size:13px; color:#999;">Please wait while we prepare your files.</p>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('convertForm').onsubmit = function() {
+            // 1. 显示弹窗
+            document.getElementById('loadingOverlay').style.display = 'block';
+
+            // 2. 清除可能存在的旧 Cookie
+            document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+
+            // 3. 轮询检查是否有下载标记
+            var checkTimer = setInterval(function() {
+                if (document.cookie.indexOf("fileDownload=true") !== -1) {
+                    // 关闭弹窗并清除标记
+                    document.getElementById('loadingOverlay').style.display = 'none';
+                    document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+                    clearInterval(checkTimer);
+                }
+            }, 500);
+        };
+    </script>
 </body>
 
 </html>
-
