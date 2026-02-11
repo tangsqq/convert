@@ -1,11 +1,14 @@
 <?php
-
 /**
- * 高级 PDF/图像转换工具 (支持自动识别域名/IP)
+ * 高级 PDF/图像转换工具 (支持分页打包 ZIP 下载)
  */
 
 $magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
 $gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
+
+// 提高性能上限
+set_time_limit(300);
+ini_set('memory_limit', '1024M');
 
 if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
     putenv("PATH=" . getenv('PATH') . ";" . $magickPath . ";" . $gsPath);
@@ -18,63 +21,85 @@ if (isset($_POST["submit"])) {
         $tempFile = $_FILES["fileToUpload"]["tmp_name"];
         $targetFormat = $_POST["targetFormat"];
         $extension = pathinfo($_FILES["fileToUpload"]["name"], PATHINFO_EXTENSION);
-        $outputFileName = 'converted_' . time() . '.' . $targetFormat;
+        $timestamp = time();
 
         try {
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not install。");
             }
 
-            $image = new Imagick();
+            // --- 核心优化 A: 先探测页数 ---
+            $identify = new Imagick();
+            $identify->pingImage(realpath($tempFile));
+            $numPages = $identify->getNumberImages();
+            $identify->clear();
+            $identify->destroy();
 
-            // 如果是 PDF，设置分辨率以保证清晰度
-            if (strtolower($extension) === 'pdf') {
-                $image->setResolution(150, 150);
-            }
-
-            // 读取完整文件
-            $image->readImage(realpath($tempFile));
-
-            // --- 关键点：处理多页面 PDF ---
-            if (strtolower($targetFormat) !== 'pdf' && $image->getNumberImages() > 1) {
-                // 1. 重置迭代器到第一页
-                $image->setFirstIterator();
-
-                // 2. 将所有页面垂直拼接 (true = 垂直, false = 水平)
-                // appendImages 会返回一个新的对象
-                $combined = $image->appendImages(true);
-
-                // 3. 释放旧的多页资源，替换为合并后的单页
-                $image->clear();
-                $image->destroy();
-                $image = $combined;
-            } else {
-                // 如果是单页或者目标仍为 PDF，执行常规合并
+            // --- 情况 1: 如果是单页或者是转换 PDF，保持原逻辑直接输出 ---
+            if ($numPages <= 1 || strtolower($targetFormat) === 'pdf') {
+                $image = new Imagick();
+                if (strtolower($extension) === 'pdf') { $image->setResolution(150, 150); }
+                $image->readImage(realpath($tempFile));
+                
+                $image->setImageBackgroundColor('white');
+                $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
                 $image = $image->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
+                $image->setImageFormat($targetFormat);
+
+                $fileData = $image->getImagesBlob();
+                $outputFileName = 'converted_' . $timestamp . '.' . $targetFormat;
+
+                header('Content-Description: File Transfer');
+                header('Content-Type: application/octet-stream');
+                header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
+                echo $fileData;
+                exit;
+            } 
+            // --- 情况 2: 多页 PDF 转单张图片 (核心改动：ZIP 打包) ---
+            else {
+                if (!class_exists('ZipArchive')) {
+                    throw new Exception("服务器未启用 Zip 扩展。");
+                }
+
+                $zip = new ZipArchive();
+                $zipFileName = 'converted_pages_' . $timestamp . '.zip';
+                $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $zipFileName;
+
+                if ($zip->open($zipPath, ZipArchive::CREATE) !== TRUE) {
+                    throw new Exception("无法创建压缩文件。");
+                }
+
+                // 核心：逐页读取并转换，防止长图导致的内存溢出和转圈
+                for ($i = 0; $i < $numPages; $i++) {
+                    $page = new Imagick();
+                    $page->setResolution(120, 120); // 略微调低分辨率确保速度
+                    $page->readImage(realpath($tempFile) . '[' . $i . ']'); // 只读第 i 页
+                    
+                    $page->setImageBackgroundColor('white');
+                    $page->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
+                    $page->setImageFormat($targetFormat);
+                    $single = $page->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
+                    
+                    // 将每一页添加进 ZIP
+                    $zip->addFromString("page_" . ($i + 1) . "." . $targetFormat, $single->getImagesBlob());
+                    
+                    $single->clear();
+                    $single->destroy();
+                    $page->clear();
+                    $page->destroy();
+                }
+                $zip->close();
+
+                // 下载 ZIP 包
+                if (ob_get_length()) ob_end_clean();
+                header('Content-Type: application/zip');
+                header('Content-Disposition: attachment; filename="' . $zipFileName . '"');
+                header('Content-Length: ' . filesize($zipPath));
+                readfile($zipPath);
+                @unlink($zipPath);
+                exit;
             }
 
-            // 设置背景颜色（防止 PNG 透明层变黑）
-            $image->setImageBackgroundColor('white');
-            $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE); // 移除透明通道，强制白底
-
-            $image->setImageFormat($targetFormat);
-
-            // 获取二进制流
-            $fileData = $image->getImagesBlob();
-
-            // 清理
-            $image->clear();
-            $image->destroy();
-
-            // 发送下载头
-            header('Content-Description: File Transfer');
-            header('Content-Type: application/octet-stream');
-            header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
-            header('Content-Transfer-Encoding: binary');
-            header('Content-Length: ' . strlen($fileData));
-
-            echo $fileData;
-            exit;
         } catch (Exception $e) {
             $message = "<div style='color:red;'>Error： " . $e->getMessage() . "</div>";
         }
@@ -169,9 +194,9 @@ if (isset($_POST["submit"])) {
 
             <label>Convert To</label>
             <select name="targetFormat">
-                <option value="jpg">JPG (Best for photos)</option>
-                <option value="png">PNG (High definition)</option>
-                <option value="pdf">PDF (Document)</option>
+                <option value="jpg">JPG</option>
+                <option value="png">PNG</option>
+                <option value="pdf">PDF</option>
             </select>
 
             <input type="submit" value="Convert" name="submit">
