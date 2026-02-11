@@ -1,13 +1,13 @@
 <?php
 
 /**
- * 高级 PDF/图像转换工具 (支持分页打包 ZIP 下载)
+ * Advanced PDF/Image Conversion Tool (Supports ZIP packaging)
  */
 
 $magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
 $gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
 
-// 提高性能上限
+// Performance limits
 set_time_limit(300);
 ini_set('memory_limit', '1024M');
 
@@ -26,17 +26,15 @@ if (isset($_POST["submit"])) {
 
         try {
             if (!class_exists('Imagick')) {
-                throw new Exception("Imagick not install。");
+                throw new Exception("Imagick not installed.");
             }
 
-            // --- 核心优化 A: 先探测页数 ---
             $identify = new Imagick();
             $identify->pingImage(realpath($tempFile));
             $numPages = $identify->getNumberImages();
             $identify->clear();
             $identify->destroy();
 
-            // --- 情况 1: 如果是单页或者是转换 PDF，保持原逻辑直接输出 ---
             if ($numPages <= 1 || strtolower($targetFormat) === 'pdf') {
                 $image = new Imagick();
                 if (strtolower($extension) === 'pdf') {
@@ -55,42 +53,34 @@ if (isset($_POST["submit"])) {
                 header('Content-Description: File Transfer');
                 header('Content-Type: application/octet-stream');
                 header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
-                // 核心：设置 Cookie 告诉前端下载已开始
                 setcookie("fileDownload", "true", time() + 30, "/");
                 echo $fileData;
                 exit;
-            }
-            // --- 情况 2: 多页 PDF 转单张图片 (核心改动：ZIP 打包) ---
-            else {
+            } else {
                 if (!class_exists('ZipArchive')) {
-                    throw new Exception("服务器未启用 Zip 扩展。");
+                    throw new Exception("Zip extension not enabled.");
                 }
 
                 $zip = new ZipArchive();
                 $zipFileName = 'converted_pages_' . $timestamp . '.zip';
-                // Docker/Linux 环境下使用系统临时目录
                 $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $zipFileName;
 
                 if ($zip->open($zipPath, ZipArchive::CREATE) !== TRUE) {
-                    throw new Exception("无法创建压缩文件。");
+                    throw new Exception("Cannot create zip file.");
                 }
 
-                // 核心：逐页读取并转换，150 DPI 高清设置
                 for ($i = 0; $i < $numPages; $i++) {
                     $page = new Imagick();
-                    // 设置高清 150 DPI
                     $page->setResolution(150, 150);
-                    $page->readImage(realpath($tempFile) . '[' . $i . ']'); // 只读第 i 页
+                    $page->readImage(realpath($tempFile) . '[' . $i . ']');
 
                     $page->setImageBackgroundColor('white');
                     $page->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
                     $page->setImageFormat($targetFormat);
                     $single = $page->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
 
-                    // 将每一页添加进 ZIP
                     $zip->addFromString("page_" . ($i + 1) . "." . $targetFormat, $single->getImagesBlob());
 
-                    // 彻底释放内存
                     $single->clear();
                     $single->destroy();
                     $page->clear();
@@ -98,34 +88,32 @@ if (isset($_POST["submit"])) {
                 }
                 $zip->close();
 
-                // 下载 ZIP 包
                 if (ob_get_length()) ob_end_clean();
                 header('Content-Type: application/zip');
                 header('Content-Disposition: attachment; filename="' . $zipFileName . '"');
                 header('Content-Length: ' . filesize($zipPath));
-                // 核心：设置 Cookie 告诉前端下载已开始
                 setcookie("fileDownload", "true", time() + 30, "/");
                 readfile($zipPath);
                 @unlink($zipPath);
                 exit;
             }
         } catch (Exception $e) {
-            $message = "<div style='color:red;'>Error： " . $e->getMessage() . "</div>";
+            $message = "<div style='color:red;'>Error: " . $e->getMessage() . "</div>";
         }
     } else {
-        $message = "<div style='color:red;'>PLease Uplolad Valid File.。</div>";
+        $message = "<div style='color:red;'>Please upload a valid file.</div>";
     }
 }
 ?>
 
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
-    <title>Convert File</title>
+    <title>File Converter</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -169,6 +157,14 @@ if (isset($_POST["submit"])) {
             box-sizing: border-box;
         }
 
+        .file-tip {
+            font-size: 12px;
+            color: #999;
+            margin-top: -15px;
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+
         input[type="submit"] {
             width: 100%;
             background: black;
@@ -193,7 +189,6 @@ if (isset($_POST["submit"])) {
             word-break: break-all;
         }
 
-        /* --- 加载弹窗样式 --- */
         #loadingOverlay {
             display: none;
             position: fixed;
@@ -242,10 +237,15 @@ if (isset($_POST["submit"])) {
 
 <body>
     <div class="container">
-        <h2>Convert File</h2>
+        <h2>File Converter</h2>
         <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
-            <input type="file" name="fileToUpload" required>
+            <input type="file" name="fileToUpload" accept=".pdf,.jpg,.jpeg,.png" required>
+
+            <div class="file-tip">
+                Supports PDF, JPG, and PNG formats.<br>
+                Multi-page PDFs will be automatically zipped.
+            </div>
 
             <label>Convert To</label>
             <select name="targetFormat">
@@ -274,16 +274,11 @@ if (isset($_POST["submit"])) {
 
     <script>
         document.getElementById('convertForm').onsubmit = function() {
-            // 1. 显示弹窗
             document.getElementById('loadingOverlay').style.display = 'block';
-
-            // 2. 清除可能存在的旧 Cookie
             document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
 
-            // 3. 轮询检查是否有下载标记
             var checkTimer = setInterval(function() {
                 if (document.cookie.indexOf("fileDownload=true") !== -1) {
-                    // 关闭弹窗并清除标记
                     document.getElementById('loadingOverlay').style.display = 'none';
                     document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
                     clearInterval(checkTimer);
