@@ -1,17 +1,22 @@
-FROM php:8.2-apache
+FROM php:8.1-apache
 
-# 安装 ImageMagick 和 Ghostscript
+# 1. 安装系统依赖
 RUN apt-get update && apt-get install -y \
     libmagickwand-dev --no-install-recommends \
     ghostscript \
-    && pecl install imagick \
-    && docker-php-ext-enable imagick
+    && rm -rf /var/lib/apt/lists/*
 
-# 复制你的代码到服务器
+# 2. 安装 Imagick
+RUN pecl install imagick && docker-php-ext-enable imagick
+
+# 3. 开启 PDF 读取权限
+RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml
+
+# 4. 关键：修正 Apache 配置，允许访问目录
+RUN sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
+
+# 5. 复制代码并强制赋予权限
 COPY . /var/www/html/
+RUN chmod -R 755 /var/www/html/ && chown -R www-data:www-data /var/www/html/
 
-# 给予权限
-RUN chown -R www-data:www-data /var/www/html/
-
-# 允许 ImageMagick 读取 PDF (解除安全限制)
-RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml || true
+EXPOSE 80
