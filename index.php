@@ -1,11 +1,13 @@
 <?php
 
 /**
- * Advanced PDF/Image Conversion Tool (Supports ZIP packaging)
+ * Advanced PDF/Image/Office Conversion Tool (Supports ZIP packaging)
  */
 
 $magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
 $gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
+// 新增 LibreOffice 路径用于 Office 转换
+$libreOfficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
 
 // Performance limits
 set_time_limit(300);
@@ -21,10 +23,49 @@ if (isset($_POST["submit"])) {
     if (isset($_FILES["fileToUpload"]) && $_FILES["fileToUpload"]["error"] == 0) {
         $tempFile = $_FILES["fileToUpload"]["tmp_name"];
         $targetFormat = $_POST["targetFormat"];
-        $extension = pathinfo($_FILES["fileToUpload"]["name"], PATHINFO_EXTENSION);
+        $originalName = $_FILES["fileToUpload"]["name"];
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $timestamp = time();
 
         try {
+            // --- 新增：Office 相关转换逻辑 (Word/Excel to PDF, PDF to Word) ---
+            $officeExtensions = ['doc', 'docx', 'xls', 'xlsx'];
+
+            if (in_array($extension, $officeExtensions) && $targetFormat === 'pdf') {
+                // Office 转 PDF
+                $outDir = sys_get_temp_dir();
+                $cmd = "$libreOfficePath --headless --convert-to pdf --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
+                shell_exec($cmd);
+
+                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.pdf';
+                if (!file_exists($convertedFile)) throw new Exception("Office conversion failed.");
+
+                $outputFileName = pathinfo($originalName, PATHINFO_FILENAME) . '.pdf';
+                header('Content-Type: application/pdf');
+                header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
+                setcookie("fileDownload", "true", time() + 30, "/");
+                readfile($convertedFile);
+                @unlink($convertedFile);
+                exit;
+            } elseif ($extension === 'pdf' && $targetFormat === 'docx') {
+                // PDF 转 Word (利用 LibreOffice 导出)
+                $outDir = sys_get_temp_dir();
+                $cmd = "$libreOfficePath --headless --convert-to docx --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
+                shell_exec($cmd);
+
+                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.docx';
+                if (!file_exists($convertedFile)) throw new Exception("PDF to Word conversion failed.");
+
+                $outputFileName = pathinfo($originalName, PATHINFO_FILENAME) . '.docx';
+                header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
+                setcookie("fileDownload", "true", time() + 30, "/");
+                readfile($convertedFile);
+                @unlink($convertedFile);
+                exit;
+            }
+            // --- Office 逻辑结束 ---
+
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not installed.");
             }
@@ -111,6 +152,8 @@ if (isset($_POST["submit"])) {
 
 <head>
     <meta charset="UTF-8">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
     <title>File Converter</title>
@@ -232,6 +275,32 @@ if (isset($_POST["submit"])) {
                 transform: rotate(360deg);
             }
         }
+
+        /* Home 按钮样式 */
+        .home-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            color: #1e293b;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            z-index: 10000;
+            /* 确保在最上层 */
+        }
+
+        .home-btn:hover {
+            transform: scale(1.1);
+            color: lightgray;
+        }
+
+        .home-btn i {
+            font-size: 40px;
+        }
     </style>
 </head>
 
@@ -240,21 +309,21 @@ if (isset($_POST["submit"])) {
         <h2>File Converter</h2>
         <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
-            <input type="file" name="fileToUpload" accept=".pdf,.jpg,.jpeg,.png" required>
-
-            <div class="file-tip">
-                Supports PDF, JPG, and PNG formats.<br>
-                Multi-page PDFs will be automatically zipped.
-            </div>
+            <input type="file" name="fileToUpload" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" required>
 
             <label>Convert To</label>
             <select name="targetFormat">
-                <option value="jpg">JPG</option>
-                <option value="png">PNG</option>
-                <option value="pdf">PDF</option>
+                <option value="pdf">PDF (.pdf)</option>
+                <option value="docx">Word (.docx)</option>
+                <option value="jpg">JPG (.jpg)</option>
+                <option value="png">PNG (.png)</option>
             </select>
 
             <input type="submit" value="Convert" name="submit">
+
+            <a href="index.html" class="home-btn" title="Back to Home">
+                <i class="fa fa-home"></i>
+            </a>
         </form>
 
         <?php if ($message): ?>
