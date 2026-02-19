@@ -4,18 +4,23 @@
  * Advanced PDF/Image/Office Conversion Tool (Supports ZIP packaging)
  */
 
-$magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
-$gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
-// 新增 LibreOffice 路径用于 Office 转换
-$libreOfficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
+// --- 路径兼容性处理 ---
+if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+    // Windows 路径
+    $magickPath = 'C:\Program Files\ImageMagick-7.1.2-Q16';
+    $gsPath = 'C:\Program Files\gs\gs10.04.1\bin';
+    $libreOfficePath = '"C:\Program Files\LibreOffice\program\soffice.exe"';
+    putenv("PATH=" . getenv('PATH') . ";" . $magickPath . ";" . $gsPath);
+} else {
+    // Docker / Linux 路径
+    $libreOfficePath = 'libreoffice';
+    // Linux 下 LibreOffice 运行需要 HOME 目录权限
+    putenv('HOME=/tmp');
+}
 
 // Performance limits
 set_time_limit(300);
 ini_set('memory_limit', '1024M');
-
-if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-    putenv("PATH=" . getenv('PATH') . ";" . $magickPath . ";" . $gsPath);
-}
 
 $message = "";
 
@@ -28,11 +33,10 @@ if (isset($_POST["submit"])) {
         $timestamp = time();
 
         try {
-            // --- 新增：Office 相关转换逻辑 (Word/Excel to PDF, PDF to Word) ---
+            // --- Office 相关转换逻辑 ---
             $officeExtensions = ['doc', 'docx', 'xls', 'xlsx'];
 
             if (in_array($extension, $officeExtensions) && $targetFormat === 'pdf') {
-                // Office 转 PDF
                 $outDir = sys_get_temp_dir();
                 $cmd = "$libreOfficePath --headless --convert-to pdf --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
                 shell_exec($cmd);
@@ -48,7 +52,6 @@ if (isset($_POST["submit"])) {
                 @unlink($convertedFile);
                 exit;
             } elseif ($extension === 'pdf' && $targetFormat === 'docx') {
-                // PDF 转 Word (利用 LibreOffice 导出)
                 $outDir = sys_get_temp_dir();
                 $cmd = "$libreOfficePath --headless --convert-to docx --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
                 shell_exec($cmd);
@@ -64,7 +67,6 @@ if (isset($_POST["submit"])) {
                 @unlink($convertedFile);
                 exit;
             }
-            // --- Office 逻辑结束 ---
 
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not installed.");
@@ -152,7 +154,6 @@ if (isset($_POST["submit"])) {
 
 <head>
     <meta charset="UTF-8">
-
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📑</text></svg>">
@@ -198,14 +199,6 @@ if (isset($_POST["submit"])) {
             border: 1px solid #ddd;
             border-radius: 6px;
             box-sizing: border-box;
-        }
-
-        .file-tip {
-            font-size: 12px;
-            color: #999;
-            margin-top: -15px;
-            margin-bottom: 20px;
-            line-height: 1.4;
         }
 
         input[type="submit"] {
@@ -276,7 +269,6 @@ if (isset($_POST["submit"])) {
             }
         }
 
-        /* Home 按钮样式 */
         .home-btn {
             position: fixed;
             top: 20px;
@@ -290,7 +282,6 @@ if (isset($_POST["submit"])) {
             text-decoration: none;
             transition: all 0.3s ease;
             z-index: 10000;
-            /* 确保在最上层 */
         }
 
         .home-btn:hover {
@@ -310,7 +301,6 @@ if (isset($_POST["submit"])) {
         <form id="convertForm" action="" method="post" enctype="multipart/form-data">
             <label>Choose File</label>
             <input type="file" name="fileToUpload" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" required>
-
             <label>Convert To</label>
             <select name="targetFormat">
                 <option value="pdf">PDF (.pdf)</option>
@@ -318,21 +308,13 @@ if (isset($_POST["submit"])) {
                 <option value="jpg">JPG (.jpg)</option>
                 <option value="png">PNG (.png)</option>
             </select>
-
             <input type="submit" value="Convert" name="submit">
-
-            <a href="index.html" class="home-btn" title="Back to Home">
-                <i class="fa fa-home"></i>
-            </a>
+            <a href="index.html" class="home-btn" title="Back to Home"><i class="fa fa-home"></i></a>
         </form>
-
         <?php if ($message): ?>
-            <div class="result">
-                <?php echo $message; ?>
-            </div>
+            <div class="result"><?php echo $message; ?></div>
         <?php endif; ?>
     </div>
-
     <div id="loadingOverlay">
         <div class="loading-box">
             <div class="spinner"></div>
@@ -340,12 +322,10 @@ if (isset($_POST["submit"])) {
             <p style="margin:10px 0 0; font-size:13px; color:#999;">Please wait while we prepare your files.</p>
         </div>
     </div>
-
     <script>
         document.getElementById('convertForm').onsubmit = function() {
             document.getElementById('loadingOverlay').style.display = 'block';
             document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-
             var checkTimer = setInterval(function() {
                 if (document.cookie.indexOf("fileDownload=true") !== -1) {
                     document.getElementById('loadingOverlay').style.display = 'none';
