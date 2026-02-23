@@ -1,8 +1,17 @@
 <?php
 
 /**
- * Advanced PDF/Image/Office Conversion Tool (Supports ZIP packaging)
+ * Advanced PDF/Image/Office Conversion Tool (Optimized for LibreOffice PDF to Word)
  */
+
+// 引入 Composer 自动加载
+if (file_exists('vendor/autoload.php')) {
+    require 'vendor/autoload.php';
+}
+
+use Smalot\PdfParser\Parser;
+use PhpOffice\PhpWord\PhpWord;
+use PhpOffice\PhpWord\IOFactory;
 
 // --- 路径兼容性处理 ---
 if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
@@ -14,12 +23,28 @@ if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
 } else {
     // Docker / Linux 路径
     $libreOfficePath = 'libreoffice';
-    // Linux 下 LibreOffice 运行需要 HOME 目录权限
     putenv('HOME=/tmp');
 }
 
+// 辅助函数：递归删除目录（用于清理 LibreOffice 产生的配置环境）
+function recursiveRemoveDir($dir)
+{
+    if (is_dir($dir)) {
+        $objects = scandir($dir);
+        foreach ($objects as $object) {
+            if ($object != "." && $object != "..") {
+                if (is_dir($dir . DIRECTORY_SEPARATOR . $object))
+                    recursiveRemoveDir($dir . DIRECTORY_SEPARATOR . $object);
+                else
+                    @unlink($dir . DIRECTORY_SEPARATOR . $object);
+            }
+        }
+        @rmdir($dir);
+    }
+}
+
 // Performance limits
-set_time_limit(300);
+set_time_limit(600);
 ini_set('memory_limit', '1024M');
 
 $message = "";
@@ -33,41 +58,61 @@ if (isset($_POST["submit"])) {
         $timestamp = time();
 
         try {
-            // --- Office 相关转换逻辑 ---
-            $officeExtensions = ['doc', 'docx', 'xls', 'xlsx'];
+            $outDir = sys_get_temp_dir();
 
+            // --- Office 相关转换逻辑 (Excel/Word to PDF) ---
+            $officeExtensions = ['doc', 'docx', 'xls', 'xlsx'];
             if (in_array($extension, $officeExtensions) && $targetFormat === 'pdf') {
-                $outDir = sys_get_temp_dir();
                 $cmd = "$libreOfficePath --headless --convert-to pdf --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
                 shell_exec($cmd);
 
                 $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.pdf';
-                if (!file_exists($convertedFile)) throw new Exception("Office conversion failed.");
+                if (!file_exists($convertedFile)) throw new Exception("Office to PDF conversion failed.");
 
-                $outputFileName = pathinfo($originalName, PATHINFO_FILENAME) . '.pdf';
                 header('Content-Type: application/pdf');
-                header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
-                setcookie("fileDownload", "true", time() + 30, "/");
-                readfile($convertedFile);
-                @unlink($convertedFile);
-                exit;
-            } elseif ($extension === 'pdf' && $targetFormat === 'docx') {
-                $outDir = sys_get_temp_dir();
-                $cmd = "$libreOfficePath --headless --convert-to docx --outdir " . escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
-                shell_exec($cmd);
-
-                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.docx';
-                if (!file_exists($convertedFile)) throw new Exception("PDF to Word conversion failed.");
-
-                $outputFileName = pathinfo($originalName, PATHINFO_FILENAME) . '.docx';
-                header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-                header('Content-Disposition: attachment; filename="' . $outputFileName . '"');
+                header('Content-Disposition: attachment; filename="' . pathinfo($originalName, PATHINFO_FILENAME) . '.pdf"');
                 setcookie("fileDownload", "true", time() + 30, "/");
                 readfile($convertedFile);
                 @unlink($convertedFile);
                 exit;
             }
 
+            // --- PDF to Word (使用 LibreOffice 优化指令) ---
+            elseif ($extension === 'pdf' && $targetFormat === 'docx') {
+                // 为防止 LibreOffice 报错，创建一个临时的 UserProfile 环境
+                $uniqueId = uniqid();
+                $tempUserDir = $outDir . DIRECTORY_SEPARATOR . "lo_profile_" . $uniqueId;
+                if (!is_dir($tempUserDir)) @mkdir($tempUserDir);
+
+                // 强制指定过滤器 writer_pdf_import 可以更好地处理 PDF 里的图片和文本框
+                // 注意 Windows 路径下 file:/// 协议的特殊处理
+                $loUserPath = "file:///" . str_replace("\\", "/", $tempUserDir);
+
+                $cmd = "$libreOfficePath -env:UserInstallation=" . escapeshellarg($loUserPath) .
+                    " --headless --infilter=\"writer_pdf_import\" --convert-to docx --outdir " .
+                    escapeshellarg($outDir) . " " . escapeshellarg($tempFile);
+
+                shell_exec($cmd);
+
+                $convertedFile = $outDir . DIRECTORY_SEPARATOR . pathinfo($tempFile, PATHINFO_FILENAME) . '.docx';
+
+                if (!file_exists($convertedFile)) {
+                    recursiveRemoveDir($tempUserDir);
+                    throw new Exception("LibreOffice failed to convert PDF to DOCX. Please check if the PDF is protected.");
+                }
+
+                header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                header('Content-Disposition: attachment; filename="' . pathinfo($originalName, PATHINFO_FILENAME) . '.docx"');
+                setcookie("fileDownload", "true", time() + 30, "/");
+                readfile($convertedFile);
+
+                // 清理工作
+                @unlink($convertedFile);
+                recursiveRemoveDir($tempUserDir);
+                exit;
+            }
+
+            // --- Imagick 相关逻辑 (保持不变) ---
             if (!class_exists('Imagick')) {
                 throw new Exception("Imagick not installed.");
             }
@@ -106,7 +151,7 @@ if (isset($_POST["submit"])) {
 
                 $zip = new ZipArchive();
                 $zipFileName = 'converted_pages_' . $timestamp . '.zip';
-                $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $zipFileName;
+                $zipPath = $outDir . DIRECTORY_SEPARATOR . $zipFileName;
 
                 if ($zip->open($zipPath, ZipArchive::CREATE) !== TRUE) {
                     throw new Exception("Cannot create zip file.");
@@ -116,14 +161,11 @@ if (isset($_POST["submit"])) {
                     $page = new Imagick();
                     $page->setResolution(150, 150);
                     $page->readImage(realpath($tempFile) . '[' . $i . ']');
-
                     $page->setImageBackgroundColor('white');
                     $page->setImageAlphaChannel(Imagick::ALPHACHANNEL_REMOVE);
                     $page->setImageFormat($targetFormat);
                     $single = $page->mergeImageLayers(Imagick::LAYERMETHOD_FLATTEN);
-
                     $zip->addFromString("page_" . ($i + 1) . "." . $targetFormat, $single->getImagesBlob());
-
                     $single->clear();
                     $single->destroy();
                     $page->clear();
@@ -319,7 +361,7 @@ if (isset($_POST["submit"])) {
         <div class="loading-box">
             <div class="spinner"></div>
             <p style="margin:0; font-weight:bold; color:#333;">Processing...</p>
-            <p style="margin:10px 0 0; font-size:13px; color:#999;">Please wait while we prepare your files.</p>
+            <p style="margin:10px 0 0; font-size:13px; color:#999;">Please wait...</p>
         </div>
     </div>
     <script>
