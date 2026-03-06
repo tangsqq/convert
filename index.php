@@ -203,18 +203,22 @@ if (isset($_POST["submit"])) {
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f7f6;
+            background-color: var(--bg);
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 20px 20px;
+            margin: 0;
+            color: #1e293b;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
-            margin: 0;
         }
 
         .container {
             background: white;
             padding: 30px;
             border-radius: 12px;
+            border: 1px solid #000;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
             width: 100%;
             max-width: 400px;
@@ -380,3 +384,4 @@ if (isset($_POST["submit"])) {
 </body>
 
 </html>
+
